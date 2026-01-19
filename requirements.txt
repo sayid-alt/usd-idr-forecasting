@@ -1,0 +1,8 @@
+keras_tuner==1.4.8
+matplotlib==3.10.8
+numpy==2.4.1
+pandas==2.3.3
+scikit_learn==1.8.0
+tensorflow==2.20.0
+wandb==0.23.1
+yfinance==1.0

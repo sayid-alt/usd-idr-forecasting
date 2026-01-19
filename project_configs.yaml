@@ -1,0 +1,67 @@
+
+project_name: idrx-forecast
+wandb_team_name: danielteam
+
+general:
+  windowing_size: 42
+  target_size: 1
+  batch_size: [8, 16, 32]
+  shuffle_buffer_size: ${{train_size}}
+
+model:
+  learning_rate: 0.0005
+  momentum: 0.9
+  optimizer: [adam]
+  epochs: 50
+  rnn:
+    units: 128
+    return_sequences: True
+  conv1d:
+    filter: 32
+    kernel_size: 3
+    strides: 1
+    padding: causal
+    activation: relu
+    name: conv1d
+  max_pooling_1d: 42 # window_size
+  dropout: 0.2
+  feed_forward_layer:
+    dense_1:
+      dense: 10
+      activation: relu
+      name: dense_1
+    output:
+      dense: 1
+      name: output
+
+tuner:
+  batch_size: 32
+  rnn_units: 
+    min_value: 50
+    max_value: 200
+    step: 30
+  conv1d:
+    filter:
+      min_value: 50
+      max_value: 100
+      step: 25
+    kernel_size: [3, 42]
+  max_pool1d: 
+    name: max_pool1d
+  flattening_layer:  ['GlobalAveragePooling1D', 'GlobalMaxPool1D']
+  batch_norm: 
+    name: batch_norm
+  dropout:
+    name: dropout
+    rate: [0.25, 0.2]
+  dense_units: [50, 42] # 42 is window size
+  learning_rate: [0.00005, 0.0005]
+  optimizers: ['adam', 'nadam']
+
+dataset:
+  provider: yfinance
+  ticker: IDR=X
+  start_date: 2002-01-01
+  end_date: 2025-09-01
+
+  test_fraction: 0.2
