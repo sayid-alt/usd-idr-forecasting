@@ -20,6 +20,6 @@ notebooks/*
 
 
 #
-*.ipynb
+.*
 .vscode
 models
