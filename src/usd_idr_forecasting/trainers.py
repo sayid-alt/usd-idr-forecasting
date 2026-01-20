@@ -6,18 +6,19 @@ import wandb
 import copy
 import tensorflow as tf
 import pandas as pd
-
 from wandb.integration.keras import WandbMetricsLogger
 from dotenv import load_dotenv
-from typing import Union
-
+from typing import Union, List
 from usd_idr_forecasting.configs import ProjectConfig
 from usd_idr_forecasting.utils import get_dt_now, wandb_auth
 from usd_idr_forecasting.data.datasets import DatasetLoader
+from usd_idr_forecasting.models import ModelLoader
 
 load_dotenv()
+
 PROJECT_WORKING_DIR = os.getenv("PROJECT_WORKING_DIR")
 WANDB_IDRX_FORECAST_KEY = os.getenv("WANDB_IDRX_FORECAST_KEY")
+
 wandb_auth(key=WANDB_IDRX_FORECAST_KEY)
 
 class ColdStartTrainer:
@@ -33,7 +34,7 @@ class ColdStartTrainer:
 	def get_dataset_bundle(self):
 		return self.train, self.valid_set
 
-	def run(self, model, batch_size: int = 32) -> None:
+	def start(self, model, batch_size: int = 32) -> None:
 		"""Training for initial params based on the previous paper.
 
 		Args:
@@ -214,3 +215,152 @@ class ColdStartTrainer:
 
 		loaded_model = tf.keras.models.load_model(model_path)
 		return loaded_model
+
+
+class Retrainer:
+	def __init__(
+		self, 
+		config: ProjectConfig, 
+		model_rank_ids: List[int], 
+		batch_sizes: List[int], 
+		rnn_type: Union['lstm', 'gru']
+	):
+		self._config = config
+		self._model_rank_ids = model_rank_ids
+		self._batch_sizes = batch_sizes
+		self._rnn_type = rnn_type
+		if self._rnn_type not in ['lstm', 'gru']:
+			raise ValueError("rnn_type must be either `lstm` or `gru`")
+		self.process_id = get_dt_now()
+		self.project_name = self._config.project_name
+		self.model_histories = {}
+		self.model_config = self._config.model
+		self.general_config = self._config.general
+		self.retrain_config = {**self.general_config, **self.model_config}
+		self.saved_dir = os.path.join(
+			f'{PROJECT_WORKING_DIR}', 
+			'models', 
+			'retrain'
+		)
+		if os.path.isdir(self.saved_dir):
+			shutil.rmtree(self.saved_dir)
+		os.makedirs(self.saved_dir)
+	
+	@property
+	def get_model_histories(self):
+		return self.model_histories
+
+	def start(self, callbacks):
+		# Initiate process id
+		print('retraining process_id:', self.process_id)
+		
+		# load 5tuned model for lstm and gru
+		lstm_loaded, gru_loaded= ModelLoader(config=self._config) \
+			.load_tuned_model(
+				v_lstm='latest',
+				v_gru='latest'
+			)
+		
+		for bs in self._batch_sizes:
+			for rank_model in self._model_rank_ids:
+				train_set, valid_set, batch_size, prep_artifact = DatasetLoader(config=self._config) \
+					.load_dataset_for_training(batch_size=bs)
+				
+				# -- Configs --
+				self.retrain_config['batch_size'] = batch_size
+				self.retrain_config['rnn_type'] = self._rnn_type
+				self.retrain_config['hyperparameters'] = lstm_loaded['metadata']['hps'][rank_model] if self._rnn_type == 'lstm' else gru_loaded['metadata']['hps'][rank_model]
+				self.retrain_config['callbacks'] = {c.__class__.__name__: vars(c) for c in callbacks}
+				self.retrain_config['model_rank_id'] = rank_model
+
+				# -- RETRAINING -- 
+				# RNN model directory
+				model_rnn_dir = os.path.join(self.saved_dir, f'{self.process_id}-{self._rnn_type}')
+				os.makedirs(model_rnn_dir, exist_ok=True)
+				
+				# set model path for retraining
+				best5_dir = lstm_loaded['dir'] if self._rnn_type == 'lstm' else gru_loaded['dir']
+				model_name = f'model-{self._rnn_type}:best-tuned-rank{rank_model}.keras'
+				model_path = f'{best5_dir}/{model_name}'
+				print('Model path:', model_path)
+	
+				# retraining...
+				history = self._retrain(
+					model_path, 
+					train_set=train_set, 
+					valid_set=valid_set, 
+					model_save_dir=model_rnn_dir,
+					callbacks=callbacks
+				)
+				# store history
+				self.model_histories[f"{bs}_{rank_model}"] = history
+
+		
+		# -- POST TRAINING OPERATION --
+
+		with wandb.init(
+			project=self.project_name,
+			job_type=f'store-best5-retrained-{self._rnn_type}-{self.process_id}'
+		) as run:
+			# define saved model artifact
+			model_artifact = wandb.Artifact(
+				name=f'retrained-5best-{self._rnn_type}',
+				type='model',
+				metadata=self.retrain_config
+			)
+		
+			# add retrained model file to wandb artifact
+			model_artifact.add_dir(model_rnn_dir)
+		
+			# wandb logger
+			run.log_artifact(model_artifact)
+			run.finish()
+		
+	def _retrain(
+			self, 
+			model_path, 
+			train_set, 
+			valid_set,
+			model_save_dir,
+			callbacks,
+	):
+			# -- Helper Function --
+			def fit_train(model, train_set=train_set, valid_set=valid_set):
+				# clear tensorflow backend session
+				tf.keras.backend.clear_session()
+				# fit retriain model
+				model_history = model.fit(
+					train_set,
+					epochs=50,
+					validation_data=valid_set,
+					callbacks=callbacks + [WandbMetricsLogger()],
+					verbose=2
+				)
+				return model_history
+
+			# -- MAIN TRAINING OPERATIONS --
+						
+			# initialize wandb
+			with wandb.init(
+				project=self.project_name,
+				group='model-training',
+				id=f'{self.process_id}@{self.retrain_config["rnn_type"]}@b{self.retrain_config["batch_size"]}@{self.retrain_config["model_rank_id"]}',
+				job_type=f'{self.process_id}-retrain-best-{self.retrain_config["rnn_type"]}@batch{self.retrain_config["batch_size"]}',
+				name=f'retrain_best_hp-{self.retrain_config["rnn_type"]}_@batch{self.retrain_config["batch_size"]}_{self.retrain_config["model_rank_id"]}',
+				config=self.retrain_config
+			) as run:         
+
+				# -- TRAINING OPERATION --
+				model = tf.keras.models.load_model(model_path)
+				model.name = f'{self.process_id}-{self.retrain_config["rnn_type"]}-retrained-best{self.retrain_config["model_rank_id"]}-{self.retrain_config["batch_size"]}.keras'
+				model_history = fit_train(model)
+
+				# -- POST TRAINING OPERATION --
+				# define saved retrain model path
+				model_save_path = os.path.join(model_save_dir, model.name)
+				
+				# save retrain model
+				model.save(model_save_path)
+				run.finish()
+
+			return model_history

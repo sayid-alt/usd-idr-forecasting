@@ -89,7 +89,7 @@ class Tuner(keras_tuner.RandomSearch):
 
         # save the 5 models with best hps locally
         for num, hp in enumerate(best_lstm_hps[:5]):
-            model_path = f'{local_dir}/model-{self._model_type}:best-tuned-rank{num}.keras'
+            model_path = f'{local_dir}/{tuner_name}-{self._model_type}/model-{self._model_type}:best-tuned-rank{num}.keras'
             model = TemporalHyperModel(config=self._config, model_type=self._model_type).build(hp)
             model.save(model_path)
 

@@ -1,14 +1,12 @@
+import os
 import wandb
 import keras_tuner
 import tensorflow as tf
 import numpy as np
 import pandas as pd
-
-
 from typing import Union, Type
 from loguru import logger
 from dotenv import load_dotenv
-
 from tensorflow.keras.metrics import MeanSquaredError, MeanAbsoluteError, MeanAbsolutePercentageError, RootMeanSquaredError
 from tensorflow.keras.layers import (
     GlobalMaxPool1D,
@@ -59,7 +57,10 @@ class ModelBuilder:
 		
 		return self._model
 	
-	def _build_rnn_network(self, rnn_class: Type[Union[tf.keras.layers.LSTM, tf.keras.layers.GRU]]):
+	def _build_rnn_network(
+		self,
+		rnn_class: Type[Union[tf.keras.layers.LSTM, tf.keras.layers.GRU]]
+	):
 		config = self.model_config['rnn']
 		return rnn_class(**config, name=rnn_class.__name__)
 
@@ -150,10 +151,18 @@ class TemporalHyperModel(keras_tuner.HyperModel):
 		config_params = self.model_config
 		if model_type == 'lstm':
 			config_params['rnn']['type'] = 'lstm'
-			rnn = LSTM(rnn_units, return_sequences=True, name='lstm_1')(input_l)
+			rnn = LSTM(
+				rnn_units, 
+				return_sequences=True, 
+				name='lstm_1',
+			)(input_l)
 		elif model_type == 'gru':
 			config_params['rnn']['type'] = 'gru'
-			rnn = GRU(rnn_units, return_sequences=True, name='gru_1')(input_l)
+			rnn = GRU(
+				rnn_units, 
+				return_sequences=True, 
+				name='gru_1',
+			)(input_l)
 		else:
 			raise NameError("model_type is str, the value must be either 'lstm' or 'gru'")
     
@@ -269,3 +278,55 @@ class TemporalHyperModel(keras_tuner.HyperModel):
                 optimizers=optimizers
         )
 		return model
+	
+
+class ModelLoader:
+	def __init__(self, config: ProjectConfig):
+		self._config = config
+		self.project_name = self._config.project_name
+		self.wandb_team_name = self._config.wandb_team_name
+
+	def load_tuned_model(self, v_lstm, v_gru):
+		with wandb.init(
+        	project=self.project_name
+		) as run:
+			# --> LSTM LOAD PROCESS <--
+			# retrieve 5 best tuned LSTM
+			best5_lstm_artifact = run.use_artifact(
+				f'{self.wandb_team_name}/{self.project_name}/model-lstm--tuned-5best:{v_lstm}',
+				type='model'
+			)
+			# get dir, files list, and metadata of best5 lstm
+			best5_lstm_dir = best5_lstm_artifact.download()
+			best5_lstm_files = os.listdir(best5_lstm_dir)
+			best5_lstm_metadata = best5_lstm_artifact.metadata
+
+			# --> GRU LOAD PROCESS <--
+			# retrieve 5 best tuned LSTM
+			best5_gru_artifact = run.use_artifact(
+				f'{self.wandb_team_name}/{self.project_name}/model-gru--tuned-5best:{v_gru}',
+				type='model'
+			)
+			# get dir, files list, and metadata of best5 lstm
+			best5_gru_dir = best5_gru_artifact.download()
+			best5_gru_files = os.listdir(best5_gru_dir)
+			best5_gru_metadata = best5_gru_artifact.metadata
+
+			run.finish()
+
+		print(f'5 best LSTM files:\n{best5_lstm_files}')
+		print(f'5 best gru files:\n{best5_gru_files}')
+
+		lstm_loaded = {
+			'dir': best5_lstm_dir,
+			'files': best5_lstm_files,
+			'metadata': best5_lstm_metadata
+		}
+
+		gru_loaded = {
+			'dir': best5_gru_dir,
+			'files': best5_gru_files,
+			'metadata': best5_gru_metadata
+		}
+
+		return (lstm_loaded, gru_loaded)
