@@ -22,6 +22,11 @@ from tensorflow.keras.layers import (
 )
 
 from usd_idr_forecasting.configs import ProjectConfig
+from usd_idr_forecasting.utils import get_dt_now, wandb_auth
+
+load_dotenv()
+WANDB_IDRX_FORECAST_KEY = os.getenv("WANDB_IDRX_FORECAST_KEY")
+wandb_auth(key=WANDB_IDRX_FORECAST_KEY)
 
 METRICS = [
             tf.keras.losses.MeanAbsoluteError(name='mae'),
@@ -285,6 +290,29 @@ class ModelLoader:
 		self._config = config
 		self.project_name = self._config.project_name
 		self.wandb_team_name = self._config.wandb_team_name
+		self.process_id = get_dt_now()
+	
+	def load_model_from_artifact(
+		self, 
+		artifact_name: str, 
+		rnn_type: Union['lstm', 'gru'],
+		model_name: str = None, 
+	):
+		run = wandb.init(
+			project=self.project_name,
+			name=f'load_model@{rnn_type}_{self.process_id}',
+			job_type='load_model',
+			group='loader'
+		)
+		model_artifact = run.use_artifact(artifact_name, type='model')
+		artifact_dir = model_artifact.download()
+		run.finish()
+
+		model_name = model_name if model_name else os.listdir(artifact_dir)[0]
+		model_path = os.path.join(artifact_dir, model_name)
+
+		loaded_model = tf.keras.models.load_model(model_path)
+		return loaded_model
 
 	def load_tuned_model(self, v_lstm, v_gru):
 		with wandb.init(
@@ -341,7 +369,7 @@ class ModelLoader:
 			job_type='load_retrained_model'
 		) as run:
 			model_artifact = run.use_artifact(
-				f'{self.wandb_team_name}/{self.project_name}/retrained-5best-{rnn_mode}:{version}')
+				f'{self.wandb_team_name}/{self.project_name}/retrained-5best-{rnn_mode}:{version}', type='model')
 
 			model_dir = model_artifact.download()
 			model_metadata = model_artifact.metadata

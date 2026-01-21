@@ -14,6 +14,7 @@ from usd_idr_forecasting.utils import get_dt_now, wandb_auth
 from usd_idr_forecasting.data.datasets import DatasetLoader
 from usd_idr_forecasting.models import ModelLoader
 from usd_idr_forecasting.evaluators import Evaluator
+from usd_idr_forecasting.processors import Loader
 
 load_dotenv()
 
@@ -124,7 +125,10 @@ class ColdStartTrainer:
 		if not self.model_type:
 			raise ValueError("model_type is not defined. Please run training first or set model_type.")
 
-		loaded_model = self._load_model_from_artifact(artifact_name=f'{self.wandb_team_name}/{self.project_name}/cold-start-{self.model_type}:latest')
+		loaded_model = ModelLoader(config=self._config) \
+			.load_model_from_artifact(
+				artifact_name=f'{self.wandb_team_name}/{self.project_name}/cold-start-{self.model_type}:latest'
+			)
 		print(loaded_model)
 		
 		# Create dataset inferenc directory
@@ -137,7 +141,7 @@ class ColdStartTrainer:
 		df_inference_path = f'{df_forecast_dir}/{df_inference_name}'
 
 		# Apply inference prediction and return prediction values dataframe
-		scaler = self._load_scaler_from_artifact(self.prep_artifact)
+		scaler = Loader.load_scaler_from_artifact(self.prep_artifact)
 		train_series, valid_series = DatasetLoader(self._config).from_wandb(data_term='splits')
 		forecast_df = Evaluator(model=model, scaler=scaler, config=self.general_config) \
 			.on_true_series(
@@ -171,36 +175,6 @@ class ColdStartTrainer:
 		run.finish()
 
 		return forecast_df
-	
-	def _load_scaler_from_artifact(self, artifact):
-		artifact_dir = artifact.download()
-		files_list = os.listdir(artifact_dir)
-		scaler_path = f"{artifact_dir}/{files_list[files_list.index('scaler.pkl')]}"
-
-		def load_scaler(scaler_path):
-			with open(scaler_path, 'rb') as f:
-				scaler = pickle.load(f)
-				return scaler
-
-		scaler = load_scaler(scaler_path)
-		return scaler
-	
-	def _load_model_from_artifact(self, artifact_name):
-		run = wandb.init(
-			project=self.project_name,
-			name=f'load_model@{self.model_type}_{self.process_id}',
-			job_type='load_model',
-			group='loader'
-		)
-		model_artifact = run.use_artifact(artifact_name, type='model')
-		artifact_dir = model_artifact.download()
-		run.finish()
-
-		model_name = os.listdir(artifact_dir)[0]
-		model_path = f'{artifact_dir}/{model_name}'
-
-		loaded_model = tf.keras.models.load_model(model_path)
-		return loaded_model
 
 class Retrainer:
 	def __init__(

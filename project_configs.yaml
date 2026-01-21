@@ -6,7 +6,7 @@ general:
   windowing_size: 42
   target_size: 1
   batch_size: [8, 16, 32]
-  shuffle_buffer_size: ${{train_size}}
+  shuffle_buffer_size: ${{series_size}}
 
 model:
   learning_rate: 0.0005

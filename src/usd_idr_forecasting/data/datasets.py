@@ -151,16 +151,20 @@ class DatasetLoader:
 	
 	def from_wandb(
 		self, 
-		data_term: Union['all', 'splits']
+		data_term: Union['all', 'splits', 'test', 'train'],
+		version: str = 'latest'
 	) -> tuple:
-		if data_term not in ['all', 'splits']:
-			raise ValueError("data_term must be either 'all' or 'splits'")
+		if data_term not in ['all', 'splits', 'test']:
+			raise ValueError("data_term must be either 'all' or 'splits' or 'test'")
 		
 		if data_term == 'all':
-			return self._get_all_registered_data()
+			return self._get_all_registered_data(version=version)
 		
 		if data_term == 'splits':
-			return self._get_splits_registered_data()
+			return self._get_splits_registered_data(version=version)
+		
+		if data_term == 'test':
+			return self._get_test_data(version=version)
 		
 	def _get_all_registered_data(self, version='latest') -> pd.DataFrame:
 		with wandb.init(
@@ -176,6 +180,8 @@ class DatasetLoader:
 				print(f'\t- {k}: {v}')
 			main_ds_dir = main_ds_artifact.download()
 			run.finish()
+
+			return main_ds_dir
 
 
 	def _get_splits_registered_data(self, version='latest') -> tuple:
@@ -226,3 +232,17 @@ class DatasetLoader:
 			f'{split_ds_dir}/{valid_files_name}', index_col='Date', parse_dates=['Date'])
 
 		return (train_series, valid_series)
+	
+	def _get_test_data(
+		self, 
+		version: str
+	):
+		with wandb.init(
+			project=self.project_name,
+			job_type='load_test_data',
+		) as run:
+			test_data_artifact = run.use_artifact(f"{self.wandb_team_name}/{self.project_name}/test-data:{version}", type='dataset')
+			test_data_dir = test_data_artifact.download()
+
+			run.finish()
+		return test_data_dir

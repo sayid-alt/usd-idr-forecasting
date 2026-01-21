@@ -1,10 +1,13 @@
 import os
 import shutil
+import pickle
+import wandb
 import numpy as np
 import pandas as pd
 import tensorflow as tf
 
 from loguru import logger
+from typing import Union
 from dotenv import load_dotenv
 from usd_idr_forecasting.configs import ProjectConfig
 from usd_idr_forecasting.utils import wandb_auth, get_dt_now
@@ -15,7 +18,7 @@ from sklearn.preprocessing import MinMaxScaler
 load_dotenv()
 PROJECT_WORKING_DIR = os.getenv('PROJECT_WORKING_DIR')
 WANDB_IDRX_FORECAST_KEY = os.getenv('WANDB_IDRX_FORECAST_KEY')
-wandb_auth(api_key=WANDB_IDRX_FORECAST_KEY)
+wandb_auth(key=WANDB_IDRX_FORECAST_KEY)
 
 
 class Scaler(BaseEstimator, TransformerMixin):
@@ -38,7 +41,7 @@ class Windower(BaseEstimator, TransformerMixin):
 		window_size: int, 
 		batch_size: int,
 		target_size: int,
-		shuffle_buffer: int,
+		shuffle_buffer: int = None,
 	):
 		"""
 		Args:
@@ -59,22 +62,40 @@ class Windower(BaseEstimator, TransformerMixin):
 	def transform(self, X: pd.Series) -> tf.data.Dataset:
 		series = tf.expand_dims(X, axis=-1)
 		dataset = tf.data.Dataset.from_tensor_slices(series)
-		dataset = dataset.window(window_size+target_size, shift=1, drop_remainder=True)
-		dataset = dataset.flat_map(lambda window : window.batch(window_size+target_size))
-		if shuffle_buffer:
-			dataest = dataset.shuffle(shuffle_buffer)
+		dataset = dataset.window(self._window_size+self._target_size, shift=1, drop_remainder=True)
+		dataset = dataset.flat_map(lambda window : window.batch(self._window_size+self._target_size))
+		if self._shuffle_buffer:
+			dataest = dataset.shuffle(self._shuffle_buffer)
 
-		dataset = dataset.map(lambda window: (window[:-target_size], window[-target_size:]))
-		dataset = dataset.batch(batch_size).prefetch(1)
+		dataset = dataset.map(lambda window: (window[:-self._target_size], window[-self._target_size:]))
+		dataset = dataset.batch(self._batch_size).prefetch(1)
 		return dataset
+
+
+class Loader:
+	def __init__(self):
+		pass
+	def load_scaler_from_artifact(self, artifact):
+		artifact_dir = artifact.download()
+		files_list = os.listdir(artifact_dir)
+		scaler_path = f"{artifact_dir}/{files_list[files_list.index('scaler.pkl')]}"
+
+		def load_scaler(scaler_path):
+			with open(scaler_path, 'rb') as f:
+				scaler = pickle.load(f)
+				return scaler
+
+		scaler = load_scaler(scaler_path)
+		return scaler
+
 
 class DataProcessor:
 	"""Pipeline and Implementation of Processing time series dataset
 	"""
 	def __init__(self, config: ProjectConfig):
 		self._config = config
-		self.config_ds = config.dataset_config
-		self.general_config = config.general_config
+		self.config_ds = self._config.dataset
+		self.general_config = self._config.general
 	
 	def prepare_data(self, data: pd.DataFrame) -> tuple:
 		"""Pipeline prepare the data to be ready to preprocess for training
@@ -164,25 +185,30 @@ class DataProcessor:
 	def preprocess(
 		self, 
 		X: pd.Series,
+		batch_size: Union[8, 16, 32],
 		scaler_obj=None, 
-		batch_size=self.general_config['batch_size'][0],
+		for_inference: bool = False
 	) -> tf.data.Dataset:
 
 		if scaler_obj == None:
 			logger.warning('Using new-fitted scaler object for preprocessing data | تحذيرا')
-
 		scaler = Scaler(scaler_obj=scaler_obj)
+
+		shuffle_buffer = self.general_config['shuffle_buffer_size']
 		windower = Windower(
-			window_size=self.general_config['Windower_size'],
+			window_size=self.general_config['windowing_size'],
 			batch_size=batch_size,
 			target_size=self.general_config['target_size'],
-			shuffle_buffer=self.general_config['shuffle_buffer']
+			shuffle_buffer=shuffle_buffer if for_inference else None
 		)
 
 		pipeline = Pipeline(steps=[
 			('normalization', scaler),
 			('Windower', windower)
 		])
+
+		if for_inference:
+			return pipeline.fit_transform(X)
 
 		preprocessed = pipeline.transform(X) if scaler_obj else pipeline.fit_transform(X)
 		return preprocessed
@@ -191,7 +217,6 @@ class DataProcessor:
 		self,
 		raw_artifact_name: str,
         process_id: str,
-        config=self.general_config,
         scaler_obj=None
 	):
 		with wandb.init(
@@ -199,6 +224,7 @@ class DataProcessor:
 			group='data_preprocessing',
 			job_type=f'data-preprocessing_{process_id}'
 		) as run:
+			config = self.general_config
 			artifact = run.use_artifact(
 				raw_artifact_name + ':latest', 
 				type='dataset'
