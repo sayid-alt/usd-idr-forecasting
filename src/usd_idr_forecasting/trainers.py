@@ -13,6 +13,7 @@ from usd_idr_forecasting.configs import ProjectConfig
 from usd_idr_forecasting.utils import get_dt_now, wandb_auth
 from usd_idr_forecasting.data.datasets import DatasetLoader
 from usd_idr_forecasting.models import ModelLoader
+from usd_idr_forecasting.evaluators import Evaluator
 
 load_dotenv()
 
@@ -127,26 +128,23 @@ class ColdStartTrainer:
 		print(loaded_model)
 		
 		# Create dataset inferenc directory
-		df_inference_dir = f'{PROJECT_WORKING_DIR}/datasets/compare'
-		if os.path.exists(df_inference_dir):
-			shutil.rmtree(df_inference_dir)
-		os.makedirs(df_inference_dir)
+		df_forecast_dir = f'{PROJECT_WORKING_DIR}/datasets/compare'
+		if os.path.exists(df_forecast_dir):
+			shutil.rmtree(df_forecast_dir)
+		os.makedirs(df_forecast_dir)
 		
 		df_inference_name = f'inference@{self.model_type}:{split_mode}_compare_forecast.csv'
-		df_inference_path = f'{df_inference_dir}/{df_inference_name}'
+		df_inference_path = f'{df_forecast_dir}/{df_inference_name}'
 
 		# Apply inference prediction and return prediction values dataframe
 		scaler = self._load_scaler_from_artifact(self.prep_artifact)
 		train_series, valid_series = DatasetLoader(self._config).from_wandb(data_term='splits')
-		forecast_df = self._compare_forecast_on_df(
-			model=loaded_model,
-			# real value of series
-			series=train_series if split_mode == 'train' else valid_series,
-			prep_series=self.train_set if split_mode == 'train' else self.valid_set,  # windowed preprocessed values
-			scaler=scaler,
-			config=self.general_config,
-			save_csv=df_inference_path
-		)
+		forecast_df = Evaluator(model=model, scaler=scaler, config=self.general_config) \
+			.on_true_series(
+				series=train_series if split_mode == 'train' else valid_series,
+				prep_series=self.train_set if split_mode == 'train' else self.valid_set,  # windowed preprocessed values
+				save_csv=df_inference_path
+			)
 
 		# Upload forecast dataframe to wandb table
 		compare_table = wandb.Table(dataframe=forecast_df)
@@ -172,18 +170,6 @@ class ColdStartTrainer:
 		run.log_artifact(artifact_dataset)
 		run.finish()
 
-		return forecast_df
-
-	def _compare_forecast_on_df(self, model, series, prep_series, scaler, config, save_csv: str = None):
-		print('prep_sries:', prep_series)
-		forecast = model.predict(prep_series)
-		forecast = scaler.inverse_transform(forecast)
-		print(forecast.shape)
-		
-		forecast_df = pd.DataFrame(series['Close'][config['windowing_size']:])
-		forecast_df['Close_Forecast'] = forecast	
-		if save_csv != None:
-			forecast_df.to_csv(save_csv)
 		return forecast_df
 	
 	def _load_scaler_from_artifact(self, artifact):
@@ -216,7 +202,6 @@ class ColdStartTrainer:
 		loaded_model = tf.keras.models.load_model(model_path)
 		return loaded_model
 
-
 class Retrainer:
 	def __init__(
 		self, 
@@ -225,6 +210,7 @@ class Retrainer:
 		batch_sizes: List[int], 
 		rnn_type: Union['lstm', 'gru']
 	):
+		self.__is_retrain = False
 		self._config = config
 		self._model_rank_ids = model_rank_ids
 		self._batch_sizes = batch_sizes
@@ -233,7 +219,6 @@ class Retrainer:
 			raise ValueError("rnn_type must be either `lstm` or `gru`")
 		self.process_id = get_dt_now()
 		self.project_name = self._config.project_name
-		self.model_histories = {}
 		self.model_config = self._config.model
 		self.general_config = self._config.general
 		self.retrain_config = {**self.general_config, **self.model_config}
@@ -245,6 +230,8 @@ class Retrainer:
 		if os.path.isdir(self.saved_dir):
 			shutil.rmtree(self.saved_dir)
 		os.makedirs(self.saved_dir)
+		self.model_histories = {}
+		self.eval_results = {}
 	
 	@property
 	def get_model_histories(self):
@@ -253,7 +240,7 @@ class Retrainer:
 	def start(self, callbacks):
 		# Initiate process id
 		print('retraining process_id:', self.process_id)
-		
+
 		# load 5tuned model for lstm and gru
 		lstm_loaded, gru_loaded= ModelLoader(config=self._config) \
 			.load_tuned_model(
@@ -297,7 +284,6 @@ class Retrainer:
 
 		
 		# -- POST TRAINING OPERATION --
-
 		with wandb.init(
 			project=self.project_name,
 			job_type=f'store-best5-retrained-{self._rnn_type}-{self.process_id}'
@@ -315,6 +301,9 @@ class Retrainer:
 			# wandb logger
 			run.log_artifact(model_artifact)
 			run.finish()
+		
+		# Set variable condition
+		self.__is_retrain = True
 		
 	def _retrain(
 			self, 
@@ -364,3 +353,109 @@ class Retrainer:
 				run.finish()
 
 			return model_history
+	
+	@property
+	def get_eval_results(self):
+		return self.eval_results
+	
+	@property
+	def is_retrain(self):
+		return self.__is_retrain
+	
+	@is_retrain.setter
+	def is_retrain(self, value):
+		self.__is_retrain = value
+
+	def evaluate(
+		self,
+		split_mode: Union['train', 'valid'],
+		model_version: str = 'checkpoint'
+	):
+
+		'''Logging compare result of true vs pred value into wandb artifact dataset'''
+		
+		if not self.__is_retrain:
+			raise ValueError(f"Retrain process is not run yet. To run, use `__class__.run()` method")
+
+		# load model directory
+		model_dir, model_metadata = ModelLoader(config=self._config) \
+			.load_retrained_model(
+				rnn_mode=self._rnn_type,
+				version=model_version
+			)
+		
+		# get split train valid of series
+		train_series, valid_series = DatasetLoader(config=self._config)\
+			.from_wandb(data_term='splits')
+
+		# initialize dataset artifact
+		artifact_dataset = wandb.Artifact(
+			name=f'5best_retrained-compare-{self._rnn_type}-{split_mode}',
+			type='dataset',
+		)
+
+		# Create dataset inference directory
+		df_forecast_dir = f'{PROJECT_WORKING_DIR}/datasets/compare-{self._rnn_type}-{self.process_id}' # directory to store in wandb artifact
+		if os.path.exists(df_forecast_dir):
+			shutil.rmtree(df_forecast_dir)
+		os.makedirs(df_forecast_dir)
+			
+		for batch_size in self._batch_sizes:
+			for rank_model_id in self._model_rank_ids:
+					# get dataset for training
+					train_set, valid_set, batch_size, prep_artifact = DatasetLoader(config=self._config) \
+						.load_dataset_for_training(batch_size=batch_size)
+					prepared_ds_dir = prep_artifact.download()
+					print('prepared dataset files: {}'.format(os.listdir(prepared_ds_dir)))
+					self.general_config['batch_size'] = batch_size
+				
+					# get scaler
+					scaler_path = os.path.join(prepared_ds_dir, 'scaler.pkl')
+					with open(scaler_path, 'rb') as scaler_file:
+							scaler = pickle.load(scaler_file)
+			
+					# load model
+					prefix_model_name = re.search('.*best', os.listdir(model_dir)[0])[0]
+					model_name = f'{prefix_model_name}{rank_model_id}-{batch_size}.keras'
+					model_path = os.path.join(model_dir, model_name)
+					loaded_model = tf.keras.models.load_model(model_path)
+
+					# set inference prediction result directory
+					df_inference_name = f'inference@{self._rnn_type}:{split_mode}_forecast_inference_r{rank_model_id}_b{batch_size}.csv'
+					df_inference_path = f'{df_forecast_dir}/{df_inference_name}' # for save csv on local
+					
+					# Apply inference prediction and return prediction values as a dataframe
+					if split_mode == 'train':
+						series, prep_series = train_series, train_set
+					elif split_mode == 'valid':
+						series, prep_series = valid_series, valid_set
+					else:
+						raise ValueError(f'{split_mode} is not available split type')
+						
+					forecast_df = Evaluator(
+						model=loaded_model, 
+						scaler=scaler, 
+						config=self._config
+					).on_origin_series(
+							series=series, # real value of series
+							prep_series=prep_series, # windowed preprocessed data
+							save_csv=df_inference_path
+					)
+
+					self.eval_results[f"{batch_size}_{rank_model_id}"] = forecast_df
+					
+					# Upload forecast dataframe to wandb table
+					compare_table = wandb.Table(dataframe=forecast_df)
+					artifact_dataset.add(compare_table, df_inference_name)
+
+		# add comparison inference table to artifact
+		artifact_dataset.add_dir(df_forecast_dir)
+		with wandb.init(
+			project=self.project_name,
+			name=f'{self.process_id}@{self._rnn_type}-{split_mode}-compare-result',
+			group='eval_comparison',
+			job_type='inference'
+		) as run:
+			run.log({'compare': compare_table})
+			run.log_artifact(artifact_dataset)
+			run.finish()

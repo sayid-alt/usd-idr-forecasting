@@ -330,3 +330,22 @@ class ModelLoader:
 		}
 
 		return (lstm_loaded, gru_loaded)
+	
+	def load_retrained_model(
+		self, 
+		rnn_mode: Union['lstm', 'gru'], 
+		version: str,
+	):
+		with wandb.init(
+			project=self.project_name,
+			job_type='load_retrained_model'
+		) as run:
+			model_artifact = run.use_artifact(
+				f'{self.wandb_team_name}/{self.project_name}/retrained-5best-{rnn_mode}:{version}')
+
+			model_dir = model_artifact.download()
+			model_metadata = model_artifact.metadata
+
+			run.finish()
+
+			return model_dir, model_metadata
