@@ -192,6 +192,7 @@ class DataProcessor:
 		])
 		
 		X_train, X_test = pipeline.fit_transform(data)
+		logger.success("Preparing data successfully")
 		return (X_train, X_test)
 	
 	def preprocess(

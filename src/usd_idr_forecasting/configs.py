@@ -29,5 +29,6 @@ class ProjectConfig(BaseModel):
 		template = env.get_template(template_name)
 		rendered_config = template.render(**kwargs)
 		config_dict = yaml.safe_load(rendered_config)
-		
+		config_dict['dataset']['start_date'] = str(config_dict['dataset']['start_date'])
+		config_dict['dataset']['end_date'] = str(config_dict['dataset']['end_date'])
 		return cls(**config_dict)

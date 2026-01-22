@@ -25,11 +25,18 @@ class DatasetLoader:
 		self.wandb_team_name = config.wandb_team_name
 		self.config_ds = config.dataset
 
-	def load_all(self, show_viz: bool = False, save_path: str = None) -> pd.DataFrame:
+	def load_data(
+		self, 
+		slicing: bool = False,
+		show_viz: bool = False, 
+		save_path: str = None,
+	) -> pd.DataFrame:
 		"""Load All time USD/IDR data
 
 		Args:
+			slicing (bool, optional): Will slice the dataset based on project configuration in yaml file
 			show_viz (bool, optional): Will show the visualization of the dataset. Defaults to False.
+			save_path (str): Will save on given path name, only works if slicing is False
 
 		Returns:
 			pd.DataFrame: dataframe of all time USD/IDR data
@@ -38,19 +45,21 @@ class DatasetLoader:
 		idrx_history = idrx.history(period="max")  # all data of IDR=X
 		idrx_history.sort_values(by='Date', ascending=True, inplace=True)
 
+		dataset = self._slice_data(df=idrx_history) if slicing else idrx_history
 		if show_viz:
-			plot_series(idrx_history, columns=idrx_history.columns)
+			plot_series(dataset, columns=dataset.columns)
 
-		if save_path:
+		if save_path and not slicing:
 			try:
-				idrx_history.to_csv(save_path)
+				dataset.to_csv(save_path)
 			except:
 				logger.warning(f"Data is not saved, path: {save_path} does not exists")
 
-		return idrx_history
+		return dataset
 	
-	def load_sliced_data(
-		self, 
+	def _slice_data(
+		self,
+		df: pd.DataFrame,
 		register_to_wandb: bool = True,
 		show_viz: bool = True
 	) -> pd.DataFrame:
@@ -63,12 +72,20 @@ class DatasetLoader:
 		Returns:
 			pd.DataFrame: dataframe of sliced time series USD/IDR data
 		"""
-		sliced_ds = idrx_history.loc[self.config_ds['start_date']: self.config_ds['end_date']]
+		if df.index.tz is not None:
+			df.index = df.index.tz_localize(None)
+
+		start = self.config_ds['start_date']
+		end = self.config_ds['end_date']
+		
+		# 3. Use .loc for label-based slicing with date strings
+		sliced_ds = df.loc[start:end]
 
 		ds_save_file = f'main_ds_{self.config_ds["start_date"]}_{self.config_ds["end_date"]}.csv'
 		ds_save_path = os.path.join(
 			PROJECT_WORKING_DIR,
-			'data',
+			'datasets',
+			'base',
 			ds_save_file
 		)
 
@@ -107,7 +124,7 @@ class DatasetLoader:
 			
 		return sliced_ds
 	
-	def load_dataset_for_training(self, batch_size: int) -> tuple:
+	def load_dataset_for_training(self, batch_size: int, version: str = 'latest') -> tuple:
 		"""Load package of datasets and wandb artifact for training usage
 
 		Args:
@@ -119,7 +136,7 @@ class DatasetLoader:
 		# helper function
 		def load_train_valid_data(project_name=self.project_name):
 			with wandb.init(project=project_name, job_type='upload-train-valid-data') as run:
-				prep_artifact = run.use_artifact(f'{self.wandb_team_name}/{self.project_name}/preprocessed_data:latest', type='dataset')
+				prep_artifact = run.use_artifact(f'{self.wandb_team_name}/{self.project_name}/preprocessed_data:{version}', type='dataset')
 				prep_artifact_dir = prep_artifact.download()
 				prep_files_list = os.listdir(prep_artifact_dir)
 				print('available preprocessed datasets:\n\t{}'.format(prep_files_list))
@@ -156,7 +173,7 @@ class DatasetLoader:
 	
 	def from_wandb(
 		self, 
-		data_term: Union['all', 'splits', 'test', 'train'],
+		data_term: Union['all', 'splits', 'test'],
 		version: str = 'latest'
 	) -> tuple:
 		if data_term not in ['all', 'splits', 'test']:
