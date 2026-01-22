@@ -19,7 +19,8 @@ notebooks/*
 .env
 
 
-#
+# Folders
 .*
 .vscode
 models
+wandb/

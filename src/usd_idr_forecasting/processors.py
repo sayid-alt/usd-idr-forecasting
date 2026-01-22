@@ -110,6 +110,7 @@ class DataProcessor:
 			def fit(self, X: pd.DataFrame, y=None):
 				return self
 			def transform(self, X: pd.DataFrame) -> pd.DataFrame:
+				X.drop(columns=['Volume', 'Dividends','Stock Splits'], inplace=True)
 				X_removed = X[
 					(X['Close'] > 5000) & (X['Close'] < 30000) &
 					(X['Open'] > 5000) & (X['Open'] < 30000) &
@@ -119,9 +120,17 @@ class DataProcessor:
 				return X_removed
 		
 		class Splitter(BaseEstimator, TransformerMixin):
-			def __init__(self, test_fraction: float, register_to_wandb: bool = True):
-				self._register_to_wandb = register_to_wandb
+			def __init__(
+				self, 
+				config: ProjectConfig,
+				test_fraction: float, 
+				regist_resuts: bool = True
+			):
+				self._config = config
+				self._regist_resuts = regist_resuts
 				self._test_fraction = test_fraction
+
+				self.config_ds = self._config.dataset
 				self.config_split = {}
 			
 			def fit(self, X, y=None):
@@ -135,7 +144,7 @@ class DataProcessor:
 				self.config_split['train_size'] = len(X_train)
 				self.config_split['test_size'] = len(X_test)
 
-				if self._register_to_wandb:
+				if self._regist_resuts:
 					self._register_to_wandb(X_train, X_test)
 
 				return X_train, X_test
@@ -149,7 +158,6 @@ class DataProcessor:
 
 				if os.path.exists(split_dir):
 					shutil.rmtree(split_dir)
-
 				os.makedirs(split_dir)
 
 				saved_ds_train_path = f'{split_dir}/train_ds_{self.config_ds["start_date"]}_{self.config_ds["end_date"]}.csv'
@@ -176,7 +184,11 @@ class DataProcessor:
 
 		pipeline = Pipeline(steps=[
 			('remover', Remover()),
-			('splitter', Splitter(test_fraction=self.config_ds['test_fraction']))
+			('splitter', Splitter(
+				test_fraction=self.config_ds['test_fraction'],
+				config=self._config
+				)
+			)
 		])
 		
 		X_train, X_test = pipeline.fit_transform(data)

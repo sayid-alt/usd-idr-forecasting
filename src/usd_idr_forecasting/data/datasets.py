@@ -9,6 +9,7 @@ import tensorflow as tf
 
 from typing import Union
 from dotenv import load_dotenv
+from loguru import logger
 from usd_idr_forecasting.configs import ProjectConfig
 from usd_idr_forecasting.utils import plot_series, wandb_auth
 
@@ -24,7 +25,7 @@ class DatasetLoader:
 		self.wandb_team_name = config.wandb_team_name
 		self.config_ds = config.dataset
 
-	def load_all(self, show_viz: bool = False) -> pd.DataFrame:
+	def load_all(self, show_viz: bool = False, save_path: str = None) -> pd.DataFrame:
 		"""Load All time USD/IDR data
 
 		Args:
@@ -33,14 +34,18 @@ class DatasetLoader:
 		Returns:
 			pd.DataFrame: dataframe of all time USD/IDR data
 		"""
-		idrx = yf.Ticker("IDR")
+		idrx = yf.Ticker("IDR=X")
 		idrx_history = idrx.history(period="max")  # all data of IDR=X
 		idrx_history.sort_values(by='Date', ascending=True, inplace=True)
 
 		if show_viz:
-			print(idrx_history.head())
-			print(idrx_history.info())
 			plot_series(idrx_history, columns=idrx_history.columns)
+
+		if save_path:
+			try:
+				idrx_history.to_csv(save_path)
+			except:
+				logger.warning(f"Data is not saved, path: {save_path} does not exists")
 
 		return idrx_history
 	
