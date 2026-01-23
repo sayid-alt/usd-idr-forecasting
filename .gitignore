@@ -24,3 +24,4 @@ notebooks/*
 .vscode
 models
 wandb/
+artifacts/*

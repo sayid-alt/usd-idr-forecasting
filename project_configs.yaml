@@ -12,7 +12,7 @@ model:
   learning_rate: 0.0005
   momentum: 0.9
   optimizer: [adam]
-  epochs: 50
+  epochs: 5
   rnn:
     units: 128
     return_sequences: True

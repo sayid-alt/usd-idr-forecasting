@@ -36,7 +36,11 @@ class ColdStartTrainer:
 	def get_dataset_bundle(self):
 		return self.train, self.valid_set
 
-	def start(self, model, batch_size: int = 32) -> None:
+	def start(
+		self, 
+		model, 
+		batch_size: int = 32
+	) -> None:
 		"""Training for initial params based on the previous paper.
 
 		Args:
@@ -121,15 +125,12 @@ class ColdStartTrainer:
 		# finish wandb run
 		run.finish()
 	
-	def evaluate(self, split_mode: Union['train', 'valid']):
+	def evaluate(
+		self, 
+		split_mode: Union['train', 'valid']
+	):
 		if not self.model_type:
 			raise ValueError("model_type is not defined. Please run training first or set model_type.")
-
-		loaded_model = ModelLoader(config=self._config) \
-			.load_model_from_artifact(
-				artifact_name=f'{self.wandb_team_name}/{self.project_name}/cold-start-{self.model_type}:latest'
-			)
-		print(loaded_model)
 		
 		# Create dataset inferenc directory
 		df_forecast_dir = f'{PROJECT_WORKING_DIR}/datasets/compare'
@@ -141,10 +142,18 @@ class ColdStartTrainer:
 		df_inference_path = f'{df_forecast_dir}/{df_inference_name}'
 
 		# Apply inference prediction and return prediction values dataframe
-		scaler = Loader.load_scaler_from_artifact(self.prep_artifact)
-		train_series, valid_series = DatasetLoader(self._config).from_wandb(data_term='splits')
-		forecast_df = Evaluator(model=model, scaler=scaler, config=self.general_config) \
-			.on_true_series(
+		scaler = Loader().load_scaler_from_artifact(
+			artifact=self.prep_artifact
+		)
+		train_series, valid_series = DatasetLoader(self._config) \
+			.from_wandb(data_term='splits')
+		
+		evaluator = Evaluator(
+			scaler=scaler,
+			config=self._config
+		)
+		evaluator.model = self.model
+		forecast_df = evaluator.on_origin_series(
 				series=train_series if split_mode == 'train' else valid_series,
 				prep_series=self.train_set if split_mode == 'train' else self.valid_set,  # windowed preprocessed values
 				save_csv=df_inference_path

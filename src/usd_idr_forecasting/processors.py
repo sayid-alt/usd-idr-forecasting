@@ -33,6 +33,9 @@ class Scaler(BaseEstimator, TransformerMixin):
 	def transform(self, X: pd.Series) -> pd.Series:
 		X_scaled = self._scaler.transform(X.values.reshape(-1, 1))
 		return pd.Series(X_scaled.flatten(), index=X.index)
+	
+	def inverse_transform(self, X):
+		return self._scaler.inverse_transform(X)
 
 class Windower(BaseEstimator, TransformerMixin):
 	"""Windower class to create windowed dataset for time series forecasting"""

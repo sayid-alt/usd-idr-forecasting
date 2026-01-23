@@ -39,7 +39,7 @@ class ModelBuilder:
 	def __init__(self, config: ProjectConfig):
 		self._config = config
 		self.general_config = config.general
-		self.model_config = config.models
+		self.model_config = config.model
 		
 		self._model = None
 	
@@ -69,9 +69,12 @@ class ModelBuilder:
 		config = self.model_config['rnn']
 		return rnn_class(**config, name=rnn_class.__name__)
 
-	def _build_network(self, model_type: Union['lstm', 'gru']) -> None:
+	def _build_network(
+		self, 
+		model_type: Union['lstm', 'gru']
+	) -> None:
+	
 		input_l = Input(shape=(self.general_config['windowing_size'], 1))
-
 		# LSTM | GRU Layer
 		rnn = self._build_rnn_network(LSTM)(input_l) if model_type == 'lstm' else self._build_rnn_network(GRU)(input_l)
 		
