@@ -71,7 +71,6 @@ class Windower(BaseEstimator, TransformerMixin):
 		dataset = dataset.batch(self._batch_size).prefetch(1)
 		return dataset
 
-
 class Loader:
 	def __init__(self):
 		pass
@@ -88,14 +87,15 @@ class Loader:
 		scaler = load_scaler(scaler_path)
 		return scaler
 
-
 class DataProcessor:
 	"""Pipeline and Implementation of Processing time series dataset
 	"""
 	def __init__(self, config: ProjectConfig):
 		self._config = config
 		self.config_ds = self._config.dataset
+		self.project_name = self._config.project_name
 		self.general_config = self._config.general
+		self.process_id = get_dt_now()
 	
 	def prepare_data(self, data: pd.DataFrame) -> tuple:
 		"""Pipeline prepare the data to be ready to preprocess for training
@@ -202,6 +202,19 @@ class DataProcessor:
 		scaler_obj=None, 
 		for_inference: bool = False
 	) -> tf.data.Dataset:
+		"""
+		Preprocess single time series data
+		use `preprocess_with_registry` to preprocess all kind of batch data with registry to wandb
+
+		Args:
+			X (pd.Series): _description_
+			batch_size (Union[8, 16, 32]): batch size
+			scaler_obj (_type_, optional): _description_. Defaults to None.
+			for_inference (bool, optional): _description_. Defaults to False.
+
+		Returns:
+			tf.data.Dataset: _description_
+		"""
 
 		if scaler_obj == None:
 			logger.warning('Using new-fitted scaler object for preprocessing data | تحذيرا')
@@ -226,16 +239,26 @@ class DataProcessor:
 		preprocessed = pipeline.transform(X) if scaler_obj else pipeline.fit_transform(X)
 		return preprocessed
 	
-	def regist_all_preprocessed_data_to_wandb(
+	def preprocess_with_registry(
 		self,
 		raw_artifact_name: str,
-        process_id: str,
-        scaler_obj=None
+        scaler_obj=None,
+		version: str = 'latest'
 	):
+		"""
+		Preprocess splitted data that has been stored in wandb, 
+		with registry pipeline to wandb dataset artifact
+
+		Args:
+			raw_artifact_name (str): Wandb Artifact name that stores splitted dataset
+			scaler_obj (_type_, optional): File object scaler. Defaults to None.
+			version (str): Version name of artifact
+		"""
+
 		with wandb.init(
 			project=self.project_name,
 			group='data_preprocessing',
-			job_type=f'data-preprocessing_{process_id}'
+			job_type=f'data-preprocessing_{self.process_id}'
 		) as run:
 			config = self.general_config
 			artifact = run.use_artifact(
@@ -263,11 +286,13 @@ class DataProcessor:
 			# load data from artifact
 			train_ds = pd.read_csv(f'{artifact_dir}/{train_files}')
 			valid_ds = pd.read_csv(f'{artifact_dir}/{valid_files}')
-			train_inputs = np.expand_dims(train_ds['Close'].to_numpy(), axis=-1)
-			valid_inputs = np.expand_dims(valid_ds['Close'].to_numpy(), axis=-1)
+			# train_inputs = np.expand_dims(train_ds['Close'].to_numpy(), axis=-1)
+			# valid_inputs = np.expand_dims(valid_ds['Close'].to_numpy(), axis=-1)
+			train_inputs = train_ds['Close']
+			valid_inputs = valid_ds['Close']
 
 			# run preprocessing pipeline
-			config, scaler = _preprocess_all_batched_data(
+			config, scaler = self._preprocess_all_batched_data(
 				train_inputs=train_inputs,
 				valid_inputs=valid_inputs,
 				scaler_obj=scaler_obj,
@@ -295,7 +320,7 @@ class DataProcessor:
 			
 			run.log_artifact(artifact)
 			run.log_artifact(preproc_artifact)
-			run.finish()	
+			run.finish()
 	
 	def _preprocess_all_batched_data(
 		self,
@@ -328,13 +353,13 @@ class DataProcessor:
 
             # 2. Windower process
 			train_windower = Windower(
-                window_size=config['Windower_size'],
+                window_size=config['windowing_size'],
                 target_size=config['target_size'],
                 batch_size=config['batch_size'][process_num],
-				shuffle_buffer=config['shuffle_buffer']
+				shuffle_buffer=config['shuffle_buffer_size']
             )
 			valid_windower = Windower(
-				window_size=config['Windower_size'],
+				window_size=config['windowing_size'],
                 target_size=config['target_size'],
                 batch_size=config['batch_size'][process_num],
                 shuffle_buffer=None
@@ -373,8 +398,8 @@ class DataProcessor:
 			config.update(new_config_from_ds_spec)
 
             # save the processed Data to local dir
-			train_preproc_file_name = f'train@preprocessed-ds_{process_id}_batch@{config["batch_size"][process_num]}'
-			valid_preproc_file_name = f'valid@preprocessed-ds_{process_id}_batch@{config["batch_size"][process_num]}'
+			train_preproc_file_name = f'train@preprocessed-ds_{self.process_id}_batch@{config["batch_size"][process_num]}'
+			valid_preproc_file_name = f'valid@preprocessed-ds_{self.process_id}_batch@{config["batch_size"][process_num]}'
 			train_preproc_saved_path = f'{saved_dir}/{train_preproc_file_name}'
 			valid_preproc_saved_path = f'{saved_dir}/{valid_preproc_file_name}'
 			train_windowed_scaled.save(train_preproc_saved_path)
