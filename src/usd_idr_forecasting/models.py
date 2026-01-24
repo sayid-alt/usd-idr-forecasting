@@ -126,14 +126,13 @@ class ModelBuilder:
 		logger.success("Successfully Creating Neural Netowkr Model Architecture")
 		logger.info("Access the model with __class__._model or for compiling with __class__.build")
 
-
-
-
 class TemporalHyperModel(keras_tuner.HyperModel):
 	def __init__(self, config: ProjectConfig, model_type):
 		self._config = config
 		self._model_type = model_type
 
+		self.process_id = get_dt_now()
+		self.tuner_project_name = f"tuned@{self._model_type}_{self.process_id}"
 		self.general_config = self._config.general
 		self.model_config = self._config.model
 		self.tuner_config = self._config.tuner

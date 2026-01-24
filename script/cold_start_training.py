@@ -62,14 +62,14 @@ trainer = ColdStartTrainer(
 trainer.start(model=model)
 
 if args.evaluate_on == 'both':
+	logger.info("Run evaluation on train & valid dataset")
 	trainer.evaluate(split_mode='train')
 	trainer.evaluate(split_mode='valid')
 
 elif args.evaluate_on == None:
-	print('Doesn\'t run any evaluation')
+	logger.info('Doesn\'t run any evaluation')
 	sys.exit(0)
 	
 else:
-	print(f"run evaluation on {args.evaluate_on}")
+	logger.info(f"run evaluation on {args.evaluate_on}")
 	trainer.evaluate(split_mode=args.evaluate_on)
-# trainer.evaluate

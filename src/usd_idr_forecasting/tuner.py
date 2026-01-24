@@ -3,38 +3,29 @@ import wandb
 import shutil
 import keras_tuner
 import tensorflow as tf
-
 from dotenv import load_dotenv
 from typing import Union
 from wandb.integration.keras import WandbMetricsLogger
-
 from usd_idr_forecasting.utils import get_dt_now
 from usd_idr_forecasting.models import TemporalHyperModel
 from usd_idr_forecasting.configs import ProjectConfig
 
-
 load_dotenv()
 PROJECT_WORKING_DIR = os.getenv("PROJECT_WORKING_DIR")
 
-
-class Tuner(keras_tuner.RandomSearch):
+class Tuner(keras_tuner.RandomSearch, TemporalHyperModel):
     def __init__(
         self, 
-        config: ProjectConfig, 
-        model_type: Union["lstm", "gru"],
-        process_id: str, 
+        config: ProjectConfig,
+        model_type: Union['lstm', 'gru'],
         *args, 
         **kwargs
     ):
-        super().__init__(*args, **kwargs)
-        self._config = config
-        self._model_type = model_type
-        self._process_id = process_id
-        
+        keras_tuner.RandomSearch.__init__(self, *args, **kwargs)
+        TemporalHyperModel.__init__(self, config, model_type)
         self.general_config = self._config.general
         self.project_name = self._config.project_name
         self.tuner_config = self._config.tuner
-
 
     def run_trial(self, trial, *args, **kwargs):
         trial_id = trial.trial_id
@@ -52,7 +43,7 @@ class Tuner(keras_tuner.RandomSearch):
         wandb.init(
             project=self.project_name,
             group=f"{self._model_type}-{tuner_name}-keras-tuner",
-            job_type=f"{self._model_type}-{tuner_name}_tuner@batch{self.tuner_config['batch_size']}-{self._process_id}",
+            job_type=f"{self._model_type}-{tuner_name}_tuner@batch{self.tuner_config['batch_size']}-{self.process_id}",
             name=f"{self._model_type}-{tuner_name}-trial-tuner@batch{self.tuner_config['batch_size']}-{trial_id}",
             tags=[tuner_name, "fine-tuning", f"{self._model_type}", f"batch{self.tuner_config['batch_size']}"],
             config=config
@@ -89,7 +80,7 @@ class Tuner(keras_tuner.RandomSearch):
 
         # save the 5 models with best hps locally
         for num, hp in enumerate(best_lstm_hps[:5]):
-            model_path = f'{local_dir}/{tuner_name}-{self._model_type}/model-{self._model_type}:best-tuned-rank{num}.keras'
+            model_path = f'{local_dir}/model-{self._model_type}:best-tuned-rank{num}.keras'
             model = TemporalHyperModel(config=self._config, model_type=self._model_type).build(hp)
             model.save(model_path)
 
